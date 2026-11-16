@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, new]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -35,9 +35,6 @@ jobs:
       - name: Read GitHub Pages settings
         id: pages
         uses: actions/configure-pages@v5
-        with:
-          # 仓库还没在 Settings → Pages 里选过 Source 时，用 token 自动启用
-          enablement: true
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
