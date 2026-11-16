@@ -9,8 +9,8 @@ import {
 } from 'jotai'
 
 import {
-  addFieldAtom, addFieldOptionAtom, layoutProjectAtom, removeFieldAtom, removeFieldOptionAtom,
-  updateFieldAtom, updateFieldOptionsAtom,
+  addFieldAtom, addFieldOptionAtom, duplicateFieldAtom, layoutProjectAtom, removeFieldAtom,
+  removeFieldOptionAtom, updateFieldAtom, updateFieldOptionsAtom,
 } from '@/state/studio-store'
 
 import {
@@ -46,6 +46,7 @@ export default function FieldPanel() {
   const addField = useSetAtom(addFieldAtom)
   const updateField = useSetAtom(updateFieldAtom)
   const removeField = useSetAtom(removeFieldAtom)
+  const duplicateField = useSetAtom(duplicateFieldAtom)
   const addFieldOption = useSetAtom(addFieldOptionAtom)
   const removeFieldOption = useSetAtom(removeFieldOptionAtom)
   const updateFieldOptions = useSetAtom(updateFieldOptionsAtom)
@@ -91,6 +92,7 @@ export default function FieldPanel() {
                       patch,
                     })}
                     onRemove={() => removeField(field.id)}
+                    onDuplicate={() => duplicateField(field.id)}
                     onAddOption={() => addFieldOption(field.id)}
                     onRemoveOption={index => removeFieldOption({
                       fieldId: field.id,
@@ -124,6 +126,7 @@ function FieldCard({
   used,
   onUpdate,
   onRemove,
+  onDuplicate,
   onAddOption,
   onRemoveOption,
   onOptions,
@@ -132,6 +135,7 @@ function FieldCard({
   used: boolean
   onUpdate: (patch: Partial<LayoutField>) => void
   onRemove: () => void
+  onDuplicate: () => void
   onAddOption: () => void
   onRemoveOption: (index: number) => void
   onOptions: (options: LayoutField['options']) => void
@@ -187,6 +191,7 @@ function FieldCard({
           >
             {field.type === 'enum' ? '枚举' : '字符串'}
           </Chip>
+          <ActionButton variant="ghost" onClick={onDuplicate} title="复制这个字段（含全部枚举选项）">复制</ActionButton>
           <ActionButton variant="danger" onClick={onRemove} title="删除字段">删除</ActionButton>
         </div>
       </div>

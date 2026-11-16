@@ -6,6 +6,17 @@ import type {
   NextConfig,
 } from 'next'
 
+/**
+ * GitHub Pages 的项目站点挂在 `/<仓库名>` 子路径下；本地开发与离线包为空。
+ * 由 `.github/workflows/deploy-pages.yml` 传入。
+ */
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? ''
+/**
+ * 静态导出开关。只在 CI 构建站点时打开 ——
+ * 本地 / 离线包仍然是有 Node 运行时的普通构建（`/api/studio/*` 要用文件系统）。
+ */
+const staticExport = process.env.NEXT_STATIC_EXPORT === '1'
+
 const
   rawRule = {
     loaders: [
@@ -14,6 +25,16 @@ const
     as: '*.js',
   } satisfies TurbopackRuleConfigItem,
   nextConfig: NextConfig = {
+    // 静态托管没有 Node 运行时：导出纯 HTML/JS，并让每个路由都落成 `xxx/index.html`
+    ...(staticExport
+      ? {
+          output: 'export' as const,
+          trailingSlash: true,
+        }
+      : {}),
+    ...(basePath === '' ? {} : {
+      basePath,
+    }),
     /* config options here */
     reactCompiler: true,
     /*

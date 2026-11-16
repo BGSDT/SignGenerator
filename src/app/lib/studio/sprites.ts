@@ -7,6 +7,10 @@
  * 完整资源路径，并给出可直接 `<img>` 的缩略图 URL。
  */
 
+import {
+  publicUrl,
+} from '@/lib/public-url'
+
 import type {
   LayoutFieldOption,
 } from './layout-model'
@@ -19,6 +23,11 @@ import {
 import {
   TEXTURE_GROUPS, TEXTURE_PUBLIC_DIR,
 } from './texture-catalog'
+
+/** 内置贴图在本站的静态 URL（兼容 GitHub Pages 的 `/仓库名` 子路径） */
+function textureUrl(file: string): string {
+  return `${publicUrl(TEXTURE_PUBLIC_DIR)}/${file}`
+}
 
 /** 资源库条目 */
 export interface SpriteItem extends LayoutFieldOption {
@@ -67,7 +76,7 @@ const DYNAMIC_GROUP: SpriteGroup = {
     return {
       label: entry.label,
       value: texturePathOf(entry.file),
-      thumb: preview ? `${TEXTURE_PUBLIC_DIR}/${preview}` : null,
+      thumb: preview ? textureUrl(preview) : null,
       file: preview,
       requires: entry.keys[0],
     }
@@ -88,7 +97,7 @@ export const SPRITE_GROUPS: readonly SpriteGroup[] = [
     items: group.items.map(item => ({
       label: item.label,
       value: texturePathOf(item.file),
-      thumb: `${TEXTURE_PUBLIC_DIR}/${item.file}`,
+      thumb: textureUrl(item.file),
       file: item.file,
     })),
   })),

@@ -821,6 +821,47 @@ export const addFieldAtom = atom(null, (get, set) => {
 })
 
 /**
+ * 复制字段：连枚举选项一起深拷贝，插在原字段后面。
+ *
+ * 占位符 key 与 NBT 键名都要避开已有字段（否则两个字段写同一个存档键），
+ * 所以统一加 `_copy` / `_copy2` 后缀；label 也标上「副本」便于区分。
+ */
+export const duplicateFieldAtom = atom(null, (get, set, id: string) => {
+  const project = get(layoutProjectAtom)
+  const index = project.fields.findIndex(field => field.id === id)
+  if (index < 0) return
+  const source = project.fields[index]
+
+  const taken = new Set(project.fields.map(field => field.key))
+  let suffix = '_copy'
+  let count = 1
+  while (taken.has(`${source.key}${suffix}`)) {
+    count += 1
+    suffix = `_copy${count}`
+  }
+
+  const field = createField({
+    ...source,
+    id: createLayoutId('field'),
+    key: `${source.key}${suffix}`,
+    // 留空的 NBT 键名本来就跟随 key，加完后缀自然也对
+    nbtKey: source.nbtKey ? `${source.nbtKey}${suffix}` : '',
+    label: `${source.label} 副本`,
+    options: source.options.map(option => ({
+      ...option,
+    })),
+  })
+
+  const fields = [...project.fields]
+  fields.splice(index + 1, 0, field)
+  set(layoutProjectAtom, {
+    ...project,
+    fields,
+  })
+  set(revisionAtom, value => value + 1)
+})
+
+/**
  * 选中动态贴图时，给路径里**缺失**的占位符自动补上对应的 enum 字段。
  *
  * 「动态贴图」= 路径里带 `{占位符}`（`sign_expressway_{logo1}.png` 之类）。

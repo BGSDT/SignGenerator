@@ -37,6 +37,7 @@
 - 支持 `switch (signVariantId)` 变体、`isBlockType(...) ? A : B` 三元、手写 `if/else` 分支
 - 支持把版面封装在辅助方法里的写法：`lines.addAll(buildRow(...))` 会按实参展开
 - 支持字符串拼接（`"...sign_{" + logoKey + "}.png"`）与 `case "logo1" -> cond ? logoType1 : ""` 映射
+- **旧存档兼容代码原样保留**：`loadCompat` / `saveAdditionalCompat` 里手写的兼容逻辑（`nbt.contains(...) ? … : legacyXxx()`、`provicial` → `provincial` 修正等）连同它依赖的私有方法、私有字段与 import 一起带进工程，重新生成后仍在，老存档的牌子不会读成默认值
 
 **生成与输出**
 - Java：方块实体、方块类、方块实体渲染器
@@ -119,5 +120,18 @@ src/app/
 - 直接写入模组目录依赖 File System Access API，请用 Chrome / Edge；其它浏览器可用 ZIP 导出
 - 工程存档在浏览器 localStorage，换机器请用 `.studio.json` 导出 / 导入
 - 语言文件生成的是增量条目，合并时要保留工程里已有内容
+
+## 部署（GitHub Pages）
+
+推送到 `main`（或 `rewrite-big-mod`）后，[deploy-pages.yml](.github/workflows/deploy-pages.yml) 会自动构建并发布：
+
+1. 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**
+   （工作流里带了 `enablement: true`，首次运行通常会自动启用）
+2. 在 **Actions** 页确认 `Deploy to GitHub Pages` 跑完
+3. 站点地址：`https://<用户名>.github.io/<仓库名>/`
+
+静态站点没有 Node 运行时，构建时会移除 `src/app/api`：**标牌库扫描、写进模组目录、AI 代理**只在本地
+`npm run dev` 可用，其余功能（画布编辑、生成代码与资源、ZIP 导出）都在浏览器里完成。
+私有仓库需要 GitHub Pro 才能使用 Pages。
 
 许可见 [LICENSE.md](LICENSE.md)。

@@ -26,6 +26,9 @@ import {
   BASEPLATE_PRESETS,
 } from './layout-model'
 import {
+  javaFieldName,
+} from './java'
+import {
   createField, createLayoutId, createLayoutProject, createLogoElement, createRectElement,
   createTextElement,
 } from './project'
@@ -1118,6 +1121,256 @@ function extractLayoutBody(source: string): string | null {
   return extractBraceBlock(source, braceIndex)
 }
 
+/** 去掉多行代码的公共缩进（保留内部相对缩进） */
+function dedent(text: string): string {
+  const lines = text.split('\n')
+  const widths = lines
+    .filter(line => line.trim() !== '')
+    .map(line => /^\s*/.exec(line)?.[0].length ?? 0)
+  const min = widths.length > 0 ? Math.min(...widths) : 0
+  return lines
+    .map(line => line.slice(min))
+    .join('\n')
+    .trim()
+}
+
+/** 生成器自己会重写的方法，不要再保留一份 */
+const REBUILT_METHODS = new Set([
+  'loadCompat',
+  'saveAdditionalCompat',
+  'ensureDefaultTextLines',
+  'rebuildTextLines',
+  'getPlaceholderValue',
+  'getFieldOptions',
+  'applyFieldOption',
+])
+
+/**
+ * 抽出实体里的「旧存档兼容代码」。
+ *
+ * `loadCompat` / `saveAdditionalCompat` 里凡是超出「逐字段读写 NBT」的语句都算
+ * 手写兼容逻辑（`nbt.contains(...) ? … : legacyXxx()`、`provicial` → `provincial`
+ * 的拼写修正等）。这些代码依赖的私有方法、私有字段与 import 也要一起带走，
+ * 否则重新生成出来的实体编译不过、老存档的牌子也会读成默认值。
+ */
+function extractCompat(source: string): {
+  imports: string[]
+  fields: string[]
+  loadLines: string[]
+  members: string[]
+  saves: string[]
+} | null {
+  const loadSignature = /public\s+void\s+loadCompat\s*\(\s*CompoundTag\s+\w+\s*\)\s*\{/.exec(source)
+  if (!loadSignature) return null
+  const loadBody = extractBraceBlock(source, (loadSignature.index ?? 0) + loadSignature[0].length - 1)
+  if (loadBody === null) return null
+
+  const loadLines: string[] = []
+  for (const raw of splitStatements(loadBody)) {
+    const statement = raw.trim().replace(/;$/, '').trim()
+    if (statement === '' || statement.startsWith('super.loadCompat(')) continue
+    // 逐字段读 NBT：生成器按字段表自己写
+    if (/^this\.\w+\s*=\s*NbtCompat\.getString\(nbt,\s*"[^"]*"\)$/.test(statement)) continue
+    // 默认版面兜底：生成器按 hasLines 自己写，语义一致
+    if (statement.startsWith('if (!CustomSignBlockEntity.hasTextLinesData(nbt)')) continue
+    loadLines.push(`${statement};`)
+  }
+
+  const saves: string[] = []
+  const saveSignature = /public\s+void\s+saveAdditionalCompat\s*\(\s*CompoundTag\s+\w+\s*\)\s*\{/.exec(source)
+  if (saveSignature) {
+    const saveBody = extractBraceBlock(source, (saveSignature.index ?? 0) + saveSignature[0].length - 1)
+    for (const raw of saveBody === null ? [] : splitStatements(saveBody)) {
+      const statement = raw.trim().replace(/;$/, '').trim()
+      if (statement === '' || statement.startsWith('super.saveAdditionalCompat(')) continue
+      // 逐字段写 NBT：生成器按字段表自己写
+      if (/^nbt\.putString\([^,]+,\s*this\.\w+\)$/.test(statement)) continue
+      saves.push(`${statement};`)
+    }
+  }
+
+  if (loadLines.length === 0 && saves.length === 0) return null
+
+  // 私有方法表：整段源码（含方法签名与花括号）
+  const methods = new Map<string, string>()
+  const pattern = /(?:^|\n)\s*private\s+[\w<>\[\], .]+\s+(\w+)\s*\([^)]*\)\s*\{/g
+  for (const match of source.matchAll(pattern)) {
+    const start = (match.index ?? 0) + match[0].indexOf('private')
+    const end = findMatching(source, (match.index ?? 0) + match[0].length - 1)
+    if (end < 0) continue
+    methods.set(match[1], dedent(source.slice(start, end + 1)))
+  }
+
+  // 兼容语句 -> 它们调用的私有方法 -> 方法里再调用的方法（广度优先）
+  const members: string[] = []
+  const taken = new Set<string>()
+  const queue = [...loadLines, ...saves]
+  while (queue.length > 0) {
+    const text = queue.shift() ?? ''
+    for (const call of text.matchAll(/\b([a-zA-Z_]\w*)\s*\(/g)) {
+      const name = call[1]
+      if (taken.has(name) || REBUILT_METHODS.has(name)) continue
+      const member = methods.get(name)
+      if (!member) continue
+      taken.add(name)
+      members.push(member)
+      queue.push(member)
+    }
+  }
+
+  // 私有字段声明：兼容代码里用到的那些（`roadType1` / `text1` ...）
+  const declarations = new Map<string, string>()
+  const declarationPattern = /(?:^|\n)\s*private\s+(?!void\s)([\w<>\[\], .]+?)\s+(\w+)\s*=\s*([^;]+);/g
+  for (const match of source.matchAll(declarationPattern)) {
+    declarations.set(match[2], `private ${match[1].trim()} ${match[2]} = ${match[3].trim()};`)
+  }
+
+  const fields: string[] = []
+  const usedFields = new Set<string>()
+  const texts = [...loadLines, ...saves, ...members]
+  for (let index = 0; index < texts.length; index += 1) {
+    const text = texts[index]
+    for (const [name, declaration] of declarations) {
+      if (usedFields.has(name)) continue
+      if (!new RegExp(`\\b${name}\\b`).test(text)) continue
+      usedFields.add(name)
+      fields.push(declaration)
+      // 字段初始值可能又引用别的字段，继续往下找
+      texts.push(declaration)
+    }
+  }
+
+  /*
+   * 嵌套枚举：`private ArrowDirection direction1 = ArrowDirection.STRAIGHT;`
+   *
+   * 兼容代码（`ArrowDirection.fromName(...)` / `direction1.getName()`）和它读写的
+   * 私有字段都依赖这个类型，枚举不跟着带回生成文件就直接编译不过
+   * （`SignGuideLaneIndicator1` / `SignExpresswayDirection3` 都是这种写法）。
+   */
+  const enumPattern = /(?:^|\n)([ \t]*(?:(?:public|private|protected)\s+)?(?:static\s+)?enum\s+(\w+)[^{]*\{)/g
+  for (const match of source.matchAll(enumPattern)) {
+    const name = match[2]
+    const declaration = match[1]
+    const start = (match.index ?? 0) + match[0].indexOf(declaration)
+    const brace = start + declaration.length - 1
+    if (source[brace] !== '{') continue
+    if (![...loadLines, ...saves, ...fields, ...members]
+      .some(text => new RegExp(`\\b${name}\\b`).test(text))) continue
+    const end = findMatching(source, brace)
+    if (end < 0) continue
+    members.push(dedent(source.slice(start, end + 1)))
+  }
+
+  const imports = Array.from(source.matchAll(/(?:^|\n)\s*(import\s+[^;]+;)/g))
+    .map(match => match[1].trim())
+
+  return {
+    imports,
+    fields,
+    loadLines,
+    members,
+    saves,
+  }
+}
+
+/** 替换标识符，但跳过字符串字面量（NBT 键名不能跟着改名） */
+function replaceOutsideStrings(text: string, from: string, to: string): string {
+  const isWordChar = (char: string | undefined) => char !== undefined && /[A-Za-z0-9_$]/.test(char)
+  let out = ''
+  for (let index = 0; index < text.length;) {
+    if (text[index] === '"') {
+      const end = skipString(text, index)
+      out += text.slice(index, end + 1)
+      index = end + 1
+      continue
+    }
+    if (text.startsWith(from, index)
+      && !isWordChar(text[index - 1])
+      && !isWordChar(text[index + from.length])) {
+      out += to
+      index += from.length
+      continue
+    }
+    out += text[index]
+    index += 1
+  }
+  return out
+}
+
+/**
+ * 让兼容代码与生成代码用同一套字段名。
+ *
+ * 只处理**源字段声明就是 `private String xxx`** 的情况：
+ * `this.logoType1 = nbt.contains("logoType1") ? … : legacyLogoType1();`
+ * 这种读的确实是版面上 `{logo1}` 那个字符串，改名后老存档的兜底逻辑才能作用到
+ * 生成字段上。
+ *
+ * 枚举 / 数字 / 自定义类型（`private ArrowDirection direction1 = …`）一律**不改名**：
+ * 兼容语句里的 `ArrowDirection.fromName(...)`、`direction1.getName()` 都是类型相关的
+ * 写法，跟着改名会直接把代码改坏 —— 这类字段连同声明原样保留即可。
+ */
+function alignCompat(
+  compat: ReturnType<typeof extractCompat>,
+  fields: LayoutField[],
+  source: string,
+): ReturnType<typeof extractCompat> {
+  if (!compat) return null
+  if (fields.length === 0) return compat
+
+  // 源码里每个私有字段的声明类型
+  const declarations = new Map<string, string>()
+  for (const match of source.matchAll(/(?:^|\n)\s*private\s+(?!void\s)([\w<>\[\], .]+?)\s+(\w+)\s*=\s*([^;]+);/g)) {
+    declarations.set(match[2], match[1].trim())
+  }
+  const isPlainString = (name: string) => declarations.get(name) === 'String'
+
+  // 源码字段名 -> 生成后的 Java 字段名
+  const nbtKeys = new Map<string, string>()
+  for (const field of fields) {
+    const nbtKey = field.nbtKey?.trim() ? field.nbtKey.trim() : field.key
+    nbtKeys.set(nbtKey, javaFieldName(field.key))
+  }
+
+  const renames = new Map<string, string>()
+  // ① 标准读取：this.<源码字段> = NbtCompat.getString(nbt, "<NBT 键>");
+  for (const match of source.matchAll(/this\.(\w+)\s*=\s*NbtCompat\.getString\(nbt,\s*"([^"]+)"\)/g)) {
+    if (!isPlainString(match[1])) continue
+    const target = nbtKeys.get(match[2])
+    if (target && target !== match[1]) renames.set(match[1], target)
+  }
+  // ② 兼容读取：`this.logoType1 = nbt.contains("logoType1") ? … : legacyLogoType1();`
+  //    赋值语句里出现的 NBT 键，同样说明它读的是那个字段
+  for (const line of [...compat.loadLines, ...compat.saves]) {
+    const assign = /^this\.(\w+)\s*=\s*([\s\S]*)$/.exec(line)
+    if (!assign || !isPlainString(assign[1])) continue
+    for (const [nbtKey, target] of nbtKeys) {
+      if (assign[2].includes(`"${nbtKey}"`) && target !== assign[1]) {
+        renames.set(assign[1], target)
+      }
+    }
+  }
+  if (renames.size === 0) return compat
+
+  const rewrite = (text: string) => {
+    let out = text
+    for (const [from, to] of renames) {
+      out = replaceOutsideStrings(out, from, to)
+    }
+    return out
+  }
+
+  return {
+    ...compat,
+    loadLines: compat.loadLines.map(rewrite),
+    saves: compat.saves.map(rewrite),
+    members: compat.members.map(rewrite),
+    fields: compat.fields.filter(declaration => {
+      const name = /(\w+)\s*=/.exec(declaration)?.[1] ?? ''
+      return name === '' || !renames.has(name)
+    }),
+  }
+}
+
 /** 条件链里的一个分支：`condition` 为空 = 最后的 `else` */
 interface LayoutBranch {
   condition: string
@@ -1576,6 +1829,11 @@ export function parseSignEntity(options: SignImportOptions): SignImportResult {
 
   const base = createLayoutProject(size.width, size.height)
   const preset = BASEPLATE_PRESETS[0]
+  // 旧存档兼容代码：只能从源码里带过来，生成时原样写回
+  const compat = alignCompat(extractCompat(options.source), fields, options.source)
+  if (compat) {
+    warnings.push(`保留了旧存档兼容代码：${compat.loadLines.length} 条读取语句、${compat.members.length} 个辅助方法（重新生成后仍在）`)
+  }
   const project: LayoutProject = {
     ...base,
     width: size.width,
@@ -1594,6 +1852,7 @@ export function parseSignEntity(options: SignImportOptions): SignImportResult {
       displayNameZh: variants[0]?.displayNameZh ?? options.className,
       displayNameEn: variants[0]?.displayNameEn ?? options.className,
       variants,
+      ...(compat ? { compat } : {}),
     },
     elements,
     fields,

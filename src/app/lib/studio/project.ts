@@ -388,6 +388,22 @@ export function sanitizeProject(raw: unknown): LayoutProject | null {
     POLE_L: num(rawZ.POLE_L, DEFAULT_Z_OFFSET.POLE_L),
   }
 
+  // 旧存档里没有 compat，不能因此丢掉已有的兼容代码
+  if (isPlainRecord(rawOptions.compat)) {
+    const strings = (value: unknown) =>
+      Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+    const compat = {
+      imports: strings(rawOptions.compat.imports),
+      fields: strings(rawOptions.compat.fields),
+      loadLines: strings(rawOptions.compat.loadLines),
+      members: strings(rawOptions.compat.members),
+      saves: strings(rawOptions.compat.saves),
+    }
+    if (compat.loadLines.length > 0 || compat.members.length > 0 || compat.saves.length > 0) {
+      options.compat = compat
+    }
+  }
+
   const elements = Array.isArray(raw.elements)
     ? raw.elements
       .filter(isPlainRecord)

@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, rewrite-big-mod]
   workflow_dispatch:
 
 permissions:
@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -35,16 +35,27 @@ jobs:
       - name: Read GitHub Pages settings
         id: pages
         uses: actions/configure-pages@v5
+        with:
+          # 仓库还没在 Settings → Pages 里选过 Source 时，用 token 自动启用
+          enablement: true
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # 静态托管没有 Node 运行时：标牌库扫描、写盘、AI 代理这三个接口依赖
+      # 本地文件系统，只能在本地/离线包里用，导出站点时整目录移除。
+      - name: Drop server-only API routes
+        run: rm -rf src/app/api
+
       - name: Build static site
         run: pnpm build
         env:
+          # 由 next.config.ts 读取：启用 output: 'export' + trailingSlash
+          NEXT_STATIC_EXPORT: '1'
+          # 项目站点挂在 /<仓库名> 子路径下，客户端资源统一走 lib/public-url
           NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
 
-      - name: Keep Next.js assets untouched
+      - name: Keep Next.js assets untouched by Jekyll
         run: touch out/.nojekyll
 
       - name: Upload Pages artifact

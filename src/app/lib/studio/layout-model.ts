@@ -203,6 +203,26 @@ export interface LayoutOptions {
   zOffset: { NORMAL: number; POLE_H: number; POLE_L: number }
   glowingText: boolean
   emitEnUs: boolean
+  /**
+   * 从模组源码导入时原样保留的旧存档兼容代码。
+   *
+   * 老方块实体的 `loadCompat` 常带「读不到新字段就按旧规则推断」的逻辑
+   * （例如 `nbt.contains("logoType1") ? … : legacyLogoType1()`、`provicial` → `provincial`
+   * 的拼写修正）。这些没法从版面/字段推导出来，生成时必须原样写回去，
+   * 否则老存档的牌子会读成默认值。
+   */
+  compat?: {
+    /** 原样带回的 import（兼容代码可能用到 RoadType 等类型） */
+    imports: string[]
+    /** 兼容代码引用到的私有字段声明（如 `roadType1` / `text1`） */
+    fields: string[]
+    /** 追加到 `loadCompat` 末尾的语句（已去掉缩进） */
+    loadLines: string[]
+    /** 类里原样保留的私有方法源码（已去掉外层缩进，含方法体） */
+    members: string[]
+    /** 追加到 `saveAdditionalCompat` 的自定义写入（已去掉缩进） */
+    saves: string[]
+  }
 }
 
 export interface LayoutProject {

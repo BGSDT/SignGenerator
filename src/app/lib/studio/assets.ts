@@ -7,6 +7,10 @@
  */
 
 import {
+  publicUrl,
+} from '@/lib/public-url'
+
+import {
   SIGN_TEXTURE_PREFIX,
 } from './sprites'
 import {
@@ -33,7 +37,7 @@ export function texturePreviewUrl(texturePath: string): string | null {
   if (!texturePath || texturePath.includes('{')) return null
   const file = texturePath.split('/').pop() ?? ''
   if (!BUILTIN_TEXTURE_FILES.has(file)) return null
-  return `${TEXTURE_PUBLIC_DIR}/${file}`
+  return `${publicUrl(TEXTURE_PUBLIC_DIR)}/${file}`
 }
 
 /** 内置贴图路径 → 文件名（用于标题/占位文字），非内置返回 null */

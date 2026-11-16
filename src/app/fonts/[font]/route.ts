@@ -21,6 +21,23 @@ const FONT_MIME_TYPES: Record<string, string> = {
   '.ttf': 'font/ttf',
 }
 
+/**
+ * 字体响应只依赖构建时就确定的文件，所以可以预渲染成静态文件 ——
+ * GitHub Pages 上没有任何 Node 运行时，动态路由必须在构建期展开。
+ */
+export const dynamic = 'force-static'
+
+export function generateStaticParams() {
+  return [
+    ...Object.keys(FONT_FILES),
+    ...Object.keys(STUDIO_FONT_FILES),
+    ...Object.values(FONT_FILES),
+    ...Object.values(STUDIO_FONT_FILES),
+  ].map(font => ({
+    font,
+  }))
+}
+
 export async function GET(
   _request: Request,
   {

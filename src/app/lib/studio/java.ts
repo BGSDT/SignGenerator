@@ -413,7 +413,9 @@ function buildEntityFile(ctx: GeneratorContext): GeneratedFile {
   out.push(`package ${pkg}.entity;`)
   out.push('')
   // 模组最新的实体文件把 import 分成三组：com.beigu / net.minecraft / java.*
-  if (fields.length > 0) {
+  // 兼容代码可能自己调 NbtCompat，即使没有字段也要带上这个 import
+  const compat = ctx.project.options.compat
+  if (fields.length > 0 || compat) {
     out.push(`import ${pkg}.api.mapper.VersionServices;`)
     out.push(`import ${pkg}.api.nbt.NbtCompat;`)
   }
@@ -428,13 +430,50 @@ function buildEntityFile(ctx: GeneratorContext): GeneratedFile {
   out.push('')
   out.push('import java.util.ArrayList;')
   if (elements.length > 0 || enumFields.length > 0) out.push('import java.util.List;')
+  if (compat && compat.imports.length > 0) {
+    // 兼容代码依赖的类型（如 RoadType）原样带回；生成器已经写过的按全名去重
+    const existing = new Set(
+      out
+        .filter(line => line.startsWith('import '))
+        .map(line => line.replace(/^import\s+/, '')),
+    )
+    const added: string[] = []
+    // 只带兼容代码真正用到的类型，避免往生成文件里塞一堆无用 import
+    const referenced = new Set<string>()
+    for (const text of [...compat.loadLines, ...compat.saves, ...compat.members, ...compat.fields]) {
+      for (const match of text.matchAll(/\b([A-Z]\w*)\b/g)) referenced.add(match[1])
+    }
+    for (const line of compat.imports) {
+      const target = line.replace(/^import\s+/, '')
+      if (existing.has(target)) continue
+      const simple = target.replace(/;$/, '').split('.').pop() ?? ''
+      if (!referenced.has(simple)) continue
+      existing.add(target)
+      added.push(line)
+    }
+    if (added.length > 0) {
+      out.push('')
+      out.push(...added)
+    }
+  }
   out.push('')
   out.push(`public class ${entityClass} extends CustomSignBlockEntity {`)
 
-  if (fields.length > 0) {
-    for (const field of fields) {
-      out.push(`    private String ${javaFieldName(field.key)} = ${javaLiteral(field.defaultValue)};`)
+  const declarations: string[] = fields.map(
+    field => `    private String ${javaFieldName(field.key)} = ${javaLiteral(field.defaultValue)};`,
+  )
+  if (compat && compat.fields.length > 0) {
+    // 兼容读取用到的私有字段（roadType1 / text1 …），生成器不认识的也要补上
+    const taken = new Set(fields.map(field => javaFieldName(field.key)))
+    for (const declaration of compat.fields) {
+      const name = /(\w+)\s*=/.exec(declaration)?.[1] ?? ''
+      if (name === '' || taken.has(name)) continue
+      taken.add(name)
+      declarations.push(`    ${declaration}`)
     }
+  }
+  if (declarations.length > 0) {
+    out.push(...declarations)
     out.push('')
   }
 
@@ -452,6 +491,10 @@ function buildEntityFile(ctx: GeneratorContext): GeneratedFile {
   for (const field of fields) {
     out.push(`        this.${javaFieldName(field.key)} = NbtCompat.getString(nbt, ${javaLiteral(fieldNbtKey(field))});`)
   }
+  if (compat && compat.loadLines.length > 0) {
+    // 从源码带过来的旧字段兼容读取：放在逐字段读之后，覆盖成兼容逻辑算出的值
+    for (const line of compat.loadLines) out.push(`        ${line}`)
+  }
   if (hasLines) {
     // 与模组现有实体一致：只有在「存档里没有文本行数据 + 玩家没编辑过」时才铺默认版面
     out.push('        if (!CustomSignBlockEntity.hasTextLinesData(nbt) && !hasCustomizedTextLines()) {')
@@ -462,12 +505,33 @@ function buildEntityFile(ctx: GeneratorContext): GeneratedFile {
   out.push('')
   out.push('    @Override')
   out.push('    public void saveAdditionalCompat(CompoundTag nbt) {')
+  if (compat && compat.saves.length > 0) {
+    /*
+     * 兼容字段的写回（roadType1 / text1 …）放在逐字段写入**之前**。
+     *
+     * 挨着原源码看，兼容代码负责的是「生成器不认识的字段」；一旦它和标准字段写
+     * 同一个 NBT 键（`SignGuideLaneIndicator1` 的 `direction1`：枚举走旧写法，
+     * 生成器另有一份字符串字段），后写的标准字段才是界面上刚改过的值，
+     * 反过来会被旧枚举值覆盖。
+     */
+    for (const line of compat.saves) out.push(`        ${line}`)
+  }
   for (const field of fields) {
     out.push(`        nbt.putString(${javaLiteral(fieldNbtKey(field))}, this.${javaFieldName(field.key)});`)
   }
   out.push('        super.saveAdditionalCompat(nbt);')
   out.push('    }')
   out.push('')
+
+  if (compat && compat.members.length > 0) {
+    // 兼容读取用到的私有方法原样保留（如 legacyLogoTypeN / longRoadName）
+    for (const member of compat.members) {
+      for (const line of member.split('\n')) {
+        out.push(line === '' ? '' : `    ${line}`)
+      }
+      out.push('')
+    }
+  }
 
   if (hasLines) {
     out.push('    private void ensureDefaultTextLines() {')
@@ -762,15 +826,16 @@ function buildTextStatements(element: LayoutTextElement, index: number): string[
     const font = normalizeFont(element.abcFont)
     const args =
       `${javaLiteral(element.text)}, ${formatFloat(element.x)}, ${formatFloat(element.y)}, ` +
-      `${formatFloat(element.scale)}, ${colorLiteral(element.color)}, ${javaLiteral(font)}`
-    if (Math.abs(normalizeNumber(element.zDelta, 0)) > 1e-6) {
+      `${formatFloat(element.scale)}, ${colorLiteral(element.color)}`
+    const zDelta = normalizeNumber(element.zDelta, 0)
+    if (Math.abs(zDelta) > 1e-6) {
+      // 模组只提供居中版 centeredWithZ，没有 leftWithZ / rightWithZ
       return [
         `${pad}lines.add(SignTextLinesHelper.centeredWithZ(${args}, ` +
-        `${formatFloat(element.zDelta)}, ${javaLiteral(font)}));`,
+        `${formatFloat(zDelta)}, ${javaLiteral(font)}));`,
       ]
     }
-    const factory = helperFactory(element.alignment)
-    return [`${pad}lines.add(SignTextLinesHelper.${factory}(${args}));`]
+    return [`${pad}lines.add(SignTextLinesHelper.${helperFactory(element.alignment)}(${args}, ${javaLiteral(font)}));`]
   }
   return buildRawTextStatements(element, index)
 }
@@ -786,7 +851,8 @@ function buildTextStatements(element: LayoutTextElement, index: number): string[
 function canUseHelper(line: LayoutTextElement): boolean {
   const alignment = normalizeAlignment(line.alignment)
   if (!alignment.endsWith('_CENTER')) return false
-  if (Math.abs(normalizeNumber(line.zDelta, 0)) > 1e-6) return false
+  // 有 Z 偏移时只有居中版 centeredWithZ 可用；左/右对齐带 Z 只能展开成 setter
+  if (Math.abs(normalizeNumber(line.zDelta, 0)) > 1e-6 && alignment !== 'CENTER_CENTER') return false
   if (Math.abs(normalizeNumber(line.rotX, 0)) > 1e-6) return false
   if (Math.abs(normalizeNumber(line.rotY, 0)) > 1e-6) return false
   if (Math.abs(normalizeNumber(line.rotZ, 0)) > 1e-6) return false
@@ -1243,7 +1309,7 @@ function toSnakeCase(value: string): string {
 }
 
 /** 字段 key → Java 字段名（非法字符替换为下划线，数字开头补下划线） */
-function javaFieldName(key: string): string {
+export function javaFieldName(key: string): string {
   const source = typeof key === 'string' ? key.trim() : ''
   const cleaned = source.replace(/[^A-Za-z0-9_$]+/g, '_')
   if (cleaned === '') return 'field'

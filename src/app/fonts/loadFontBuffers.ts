@@ -1,3 +1,7 @@
+import {
+  publicUrl,
+} from '@/lib/public-url'
+
 import type {
   FontKey,
 } from '../generators/svg-text'
@@ -19,14 +23,14 @@ export const STUDIO_FONT_FILES: Record<string, string> = {
   unifont: 'unifont-17.0.04.ttf',
 }
 
-export const STUDIO_FONT_URL = '/fonts/unifont'
+export const STUDIO_FONT_URL = publicUrl('/fonts/unifont')
 
-export const FONT_URLS = {
-  han: '/fonts/han',
-  a: '/fonts/a',
-  b: '/fonts/b',
-  c: '/fonts/c',
-} as const
+export const FONT_URLS: Record<FontKey, string> = {
+  han: publicUrl('/fonts/han'),
+  a: publicUrl('/fonts/a'),
+  b: publicUrl('/fonts/b'),
+  c: publicUrl('/fonts/c'),
+}
 
 export type FontBuffers = Record<FontKey, Uint8Array>
 

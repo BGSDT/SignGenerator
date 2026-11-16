@@ -6,6 +6,9 @@ import type {
   MetadataRoute,
 } from 'next'
 
+/** 静态导出的站点在构建期就要把 manifest 落成文件 */
+export const dynamic = 'force-static'
+
 export default function manifest() {
   const
     label = '道路标牌生成器',
